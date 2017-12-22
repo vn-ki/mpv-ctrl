@@ -1,5 +1,9 @@
 import socket
 import json
+try :
+    from mpris.MPRIS import MPRIS
+except ImportError :
+    MPRIS_AVAILABLE = False
 
 class seekMode :
     RELATIVE = 'relative'
@@ -10,17 +14,15 @@ class seekMode :
 class mpvError(Exception) :
     pass
 
-class mpvConnectionError(mpvError) :
-    pass
-
 class mpvControl :
-    def __init__(self, path) :
+    def __init__(self, path, mpris_enabled=False, mpris_identity = 'mpv') :
         self.target = socket.socket (socket.AF_UNIX, socket.SOCK_STREAM)
-        try :
-            self.target.connect(path)
-        except ConnectionRefusedError :
-            raise mpvConnectionError("Connection refused by "+path)
+        self.target.connect(path)
+        if not MPRIS_AVAILABLE :
+            mpris_enabled = False
 
+        if mpris_enabled:
+            self.mpris = MPRIS(mpris_identity)
     ## Main Methods
 
     def status(self) :
@@ -33,10 +35,16 @@ class mpvControl :
         return
 
     def filename(self) :
-        return self.getProperty('filename')
+        reply = self.getProperty('filename')
+        if reply['error'] != 'success' :
+            raise mpvError(reply['error'])
+        return reply['data']
 
     def path(self) :
-        return self.getProperty('working-directory')+self.getProperty('filename')
+        reply = self.getProperty('working-directory')
+        if reply['error'] != 'success' :
+            raise mpvError(reply['error'])
+        return reply['data'] + self.filename()
 
     def setFullscreen(self, b) :
         self.setProperty('fs', b)
@@ -51,6 +59,9 @@ class mpvControl :
         self.setProperty('pause', True)
         return
 
+    def PlayPause(self) :
+        return
+
     def next(self, force=False) :
         if force == False :
             reply = self.command('playlist_next', 'weak')
@@ -59,7 +70,7 @@ class mpvControl :
 
         return reply
 
-    def prev(self, force=False) :
+    def previous(self, force=False) :
         if force == False :
             reply = self.command('playlist_prev', 'weak')
         else :
@@ -68,7 +79,10 @@ class mpvControl :
         return reply
 
     def getDuration(self) :
-        return self.getProperty('duration')
+        reply = self.getProperty('duration')
+        if reply['error'] != 'success' :
+            raise mpvError(reply['error'])
+        return reply['data']
 
     def seek(self, seconds, seekMode = seekMode.RELATIVE) :
         self.command('seek', seconds, seekMode)
@@ -81,7 +95,10 @@ class mpvControl :
         return
 
     def getSpeed(self) :
-        return
+        reply = self.getProperty('speed')
+        if reply['error'] != 'success' :
+            raise mpvError(reply['error'])
+        return reply['data']
 
     ###
 
@@ -93,7 +110,10 @@ class mpvControl :
         reply = self.setProperty('volume', volume)
 
     def getVolume(self) :
-        return self.getProperty('volume')
+        reply = self.getProperty('volume')
+        if reply['error'] != 'success' :
+            raise mpvError(reply['error'])
+        return reply['data']
     ###
 
     ###Playlist controls
@@ -133,15 +153,20 @@ class mpvControl :
     ###Metadata
 
     def getMetadata(self) :
-
-        return
+        reply = self.getProperty('metadata')
+        if reply['error'] != 'success' :
+            raise mpvError(reply['error'])
+        return reply['data']
 
     def getTitle(self) :
+        reply = self.getProperty('media-title')
+        if reply['error'] != 'success' :
+            raise mpvError(reply['error'])
+        return reply['data']
+
+    def setTitle(self, title) :
+
         return
-
-     def setTitle(self, title) :
-
-         return
     ###
     ##
 
@@ -164,6 +189,8 @@ class mpvControl :
         #TODO format reply and raise exception on {"error" : "Property not found"}
         reply = self._getProperty(property)
 
+        reply = json.loads(reply)
+
         return reply
 
 
@@ -172,6 +199,8 @@ class mpvControl :
         cmd = ['get_property']
         cmd.append(property)
         reply = self._command(cmd)
+        if '"data"' not in reply :
+            reply = self._receiveReply()
         return reply
 
     def setProperty(self, property, arg) :
@@ -185,6 +214,7 @@ class mpvControl :
         cmd.append(property)
         cmd.append(arg)
         reply = self._command(cmd)
+
         return reply
 
     ## Methods for parsing commands and sending them to the socket
