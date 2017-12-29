@@ -1,7 +1,11 @@
 import socket
 import json
+
 try :
-    from mpris.MPRIS import MPRIS
+    from mpris.mpris import MPRIS
+    from pydbus import SessionBus
+    import pkg_resources
+    MPRIS_AVAILABLE = True
 except ImportError :
     MPRIS_AVAILABLE = False
 
@@ -10,6 +14,11 @@ class seekMode :
     ABSOLUTE = 'absolute'
     ABSOLUTE_PERCENT = 'absolute-percent'
     RELATIVE_PERCENT = 'relative-percent'
+
+class queueMode :
+    REPLACE = 'replace'
+    APPEND = 'append'
+    APPEND_PLAY = 'append-play'
 
 class mpvError(Exception) :
     pass
@@ -23,6 +32,11 @@ class mpvControl :
 
         if mpris_enabled:
             self.mpris = MPRIS(mpris_identity)
+            MPRIS.dbus = pkg_resources.resource_string(__name__, "mpris/mpris.xml").decode("utf-8")
+            self.mpris.player = self
+            bus = SessionBus()
+            bus.publish('org.mpris.MediaPlayer2.YouTubePlayer', self.mpris, ("/org/mpris/MediaPlayer2", self.mpris) )
+
     ## Main Methods
 
     def status(self) :
@@ -32,22 +46,27 @@ class mpvControl :
 
     def isPlaying(self) :
         #TODO
-        return
+        reply = self.getProperty('core-idle')
+        return reply['data']
 
     def filename(self) :
         reply = self.getProperty('filename')
-        if reply['error'] != 'success' :
-            raise mpvError(reply['error'])
         return reply['data']
 
     def path(self) :
         reply = self.getProperty('working-directory')
-        if reply['error'] != 'success' :
-            raise mpvError(reply['error'])
         return reply['data'] + self.filename()
 
     def setFullscreen(self, b) :
         self.setProperty('fs', b)
+
+    def enableMPRIS(self, mpris_identity = 'mpv') :
+        self.mpris = MPRIS(mpris_identity)\
+        MPRIS.dbus = pkg_resources.resource_string(__name__, "mpris/mpris.xml").decode("utf-8")
+        self.mpris.player = self
+        bus = SessionBus()
+        bus.publish('org.mpris.MediaPlayer2.YouTubePlayer', self.mpris, ("/org/mpris/MediaPlayer2", self.mpris) )
+
 
     ###Playback controls
 
@@ -60,7 +79,9 @@ class mpvControl :
         return
 
     def PlayPause(self) :
-        return
+        status = self.isPlaying()
+        self.setProperty('pause', status)
+        return not status
 
     def next(self, force=False) :
         if force == False :
@@ -80,8 +101,6 @@ class mpvControl :
 
     def getDuration(self) :
         reply = self.getProperty('duration')
-        if reply['error'] != 'success' :
-            raise mpvError(reply['error'])
         return reply['data']
 
     def seek(self, seconds, seekMode = seekMode.RELATIVE) :
@@ -90,14 +109,12 @@ class mpvControl :
     def revertSeek(self) :
         self.command('revert_seek')
 
-    def setSpeed(self, speed) :
-
+    def setSpeed(self, speed=1.0) :
+        self.setProperty('speed', speed)
         return
 
     def getSpeed(self) :
         reply = self.getProperty('speed')
-        if reply['error'] != 'success' :
-            raise mpvError(reply['error'])
         return reply['data']
 
     ###
@@ -111,42 +128,43 @@ class mpvControl :
 
     def getVolume(self) :
         reply = self.getProperty('volume')
-        if reply['error'] != 'success' :
-            raise mpvError(reply['error'])
         return reply['data']
     ###
 
     ###Playlist controls
-    def add(self, path) :
+    def add(self, path, queueMode = queueMode.REPLACE) :
+        #TODO Add support for options
+        reply = self.command('loadfile', path, queueMode)
+        return reply
 
-        return
-
-    def enqueue(self, path) :
-
-        return
+    def playlistPosition(self) :
+        reply = self.getProperty('playlist-pos')
+        return reply['data']
 
     def playlist(self) :
         #Returns playlist
-
-        return
+        reply = self.getProperty('playlist')
+        return reply['data']
 
     def playItem(self, itemNo) :
 
         return
 
-    def remove(self, ItemNo) :
+    def remove(self, index='current') :
+        reply = self.command('playlist-remove', ItemNo)
+        return True
 
-        return
-
-    def repeat(self, b) :
-        #Turn on off repeat
-
-        return
+    def move(self, i1, i2) :
+        reply = self.command('playlist-move'. i1, i2)
+        return True
 
     def clearPlaylist(self) :
+        reply = self.command('playlist-clear')
+        return True
 
-        return
-    #SHuffle?
+    def shufflePlaylist(self) :
+        reply = self.command('playlist-shuffle')
+        return True
 
     ###
 
@@ -154,14 +172,10 @@ class mpvControl :
 
     def getMetadata(self) :
         reply = self.getProperty('metadata')
-        if reply['error'] != 'success' :
-            raise mpvError(reply['error'])
         return reply['data']
 
     def getTitle(self) :
         reply = self.getProperty('media-title')
-        if reply['error'] != 'success' :
-            raise mpvError(reply['error'])
         return reply['data']
 
     def setTitle(self, title) :
@@ -191,6 +205,12 @@ class mpvControl :
 
         reply = json.loads(reply)
 
+        try :
+            if reply['error'] != 'success' :
+                raise mpvError(reply['error'])
+        except KeyError :
+            pass
+
         return reply
 
 
@@ -207,6 +227,15 @@ class mpvControl :
         ''' Process the reply from _setProperty() '''
         #TODO Raise an exception of error != success
         reply = self._setProperty(property, arg)
+        reply = json.loads(reply)
+        #print(reply )
+
+        try :
+            if reply['error'] != 'success' :
+                raise mpvError(reply['error'])
+        except KeyError :
+            pass
+
         return reply
 
     def _setProperty(self, property, arg) :
@@ -214,6 +243,8 @@ class mpvControl :
         cmd.append(property)
         cmd.append(arg)
         reply = self._command(cmd)
+        if '"error"' not in reply :
+            reply = self._receiveReply()
 
         return reply
 
@@ -232,6 +263,11 @@ class mpvControl :
             raise mpvError("No host running on the given socket")
 
     def _receiveReply(self) :
-        reply = self.target.recv(1024)
-        reply = str(reply, 'utf-8')
+        reply = ''
+        while True :
+            t = str(self.target.recv(1024), 'utf-8')
+            #print(len(t))
+            reply += t
+            if len(t)<1023 :
+                break
         return reply
