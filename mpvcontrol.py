@@ -62,7 +62,7 @@ class mpvControl :
 
     def enableMPRIS(self, mpris_identity = 'mpv') :
         self.mpris = MPRIS(mpris_identity)\
-        MPRIS.dbus = pkg_resources.resource_string(__name__, "mpris/mpris.xml").decode("utf-8")
+        #MPRIS.dbus = pkg_resources.resource_string(__name__, "mpris/mpris.xml").decode("utf-8")
         self.mpris.player = self
         bus = SessionBus()
         bus.publish('org.mpris.MediaPlayer2.YouTubePlayer', self.mpris, ("/org/mpris/MediaPlayer2", self.mpris) )
